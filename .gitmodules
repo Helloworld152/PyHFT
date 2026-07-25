@@ -1,0 +1,4 @@
+[submodule "third_party/hft-common"]
+	path = third_party/hft-common
+	url = https://github.com/Helloworld152/hft-common.git
+	branch = main
