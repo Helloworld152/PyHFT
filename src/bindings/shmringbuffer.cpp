@@ -2,8 +2,10 @@
 
 #include <cstdint>
 #include <cstring>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 
 #include "hft_common/ipc/shm_ring_buffer.h"
 #include "pyhft/ctp_shm_tick_record.h"
@@ -73,9 +75,12 @@ public:
         next_seq_ = latest >= capacity ? (latest - capacity + 1) : 1;
     }
 
-    py::list poll() {
+    py::list poll(py::object symbol = py::none(), py::object symbols = py::none()) {
         if (closed_) {
             throw std::runtime_error("ShmRingBufferReader is closed");
+        }
+        if (!symbol.is_none() && !symbols.is_none()) {
+            throw std::invalid_argument("symbol and symbols cannot be used together");
         }
 
         py::list out;
@@ -94,11 +99,28 @@ public:
             next_seq_ = earliest;
         }
 
+        std::optional<std::unordered_set<std::string>> symbol_filter;
+        if (!symbol.is_none()) {
+            symbol_filter = std::unordered_set<std::string>{symbol.cast<std::string>()};
+        } else if (!symbols.is_none()) {
+            symbol_filter.emplace();
+            for (const py::handle item : symbols) {
+                symbol_filter->insert(py::cast<std::string>(item));
+            }
+        }
+
         std::uint64_t seq = next_seq_;
         for (; seq <= latest; ++seq) {
             const auto* msg = ring_.read(seq);
             if (msg == nullptr) {
                 continue;
+            }
+            if (symbol_filter.has_value()) {
+                char msg_symbol[sizeof(msg->symbol) + 1] {};
+                std::memcpy(msg_symbol, msg->symbol, sizeof(msg->symbol));
+                if (!symbol_filter->contains(msg_symbol)) {
+                    continue;
+                }
             }
             out.append(to_dict(*msg));
         }
@@ -130,7 +152,11 @@ PYBIND11_MODULE(_shmringbuffer, m) {
 
     py::class_<ShmRingBufferReader>(m, "ShmRingBufferReader")
         .def(py::init<std::string>(), py::arg("name"))
-        .def("poll", &ShmRingBufferReader::poll)
+        .def(
+            "poll",
+            &ShmRingBufferReader::poll,
+            py::arg("symbol") = py::none(),
+            py::arg("symbols") = py::none())
         .def("close", &ShmRingBufferReader::close)
         .def_property_readonly("closed", &ShmRingBufferReader::closed);
 }
